@@ -1,6 +1,5 @@
 /**
-* this is initialized client side
-* and is used to control the App functions
+* used to control the App functions
 * and hold globals values
 * @namespace App
 */
