@@ -1,6 +1,6 @@
 function test() {
-  Logger.log(getCategories(100));
-  Logger.log(getQuestions("U.S. CITIES", 5));
+  //Logger.log(getCategories(100));
+  Logger.log(JSON.stringify(getQuestions("U.S. CITIES", 5,2)));
 }
 /**
  * will do a bigquery to return categories
@@ -23,7 +23,7 @@ function getCategories (maxCats,noCache) {
   var data = noCache ? null : cache.get(cacheKey);
   var result = data ? JSON.parse(data) : doQuery_ (sqlString);
 
-  // always write it to cache regardless
+  // always write it to cache regardless - maximum that it can be stored is 6 hours
   cache.put(cacheKey, JSON.stringify(result),60*60*6);
   return result;
   
@@ -33,31 +33,48 @@ function getCategories (maxCats,noCache) {
  * will be called by any script wanting some questions
  * @param {string} category the category
  * @param {number} numAnswers number of answers to provide
+ * @param {number} chunkSize the number of questions to get
  * @return {object] the result
  */
-function getQuestions (category, numAnswers) {
+function getQuestions (category, numAnswers, chunkSize) {
   App.init();
   var ag = App.globals.bigQuery;
-  // get a number of questions
+  
+  // get a number of questions plus a few more in case there are duplicate answers
   var sqlString =  'SELECT *, rand() as rand FROM' + 
     ' [' + ag.dataStore + '.' + ag.table + ']' + 
     ' WHERE category = "' + category +'"' +
     ' ORDER BY rand' +
-    ' LIMIT ' + numAnswers;
+    ' LIMIT ' + Math.ceil(numAnswers * chunkSize * 1.2);
 
+  // do the query
   var data  = doQuery_ (sqlString);
-    
-  // reduce the results to just what we need
-  var shuffled = shuffleArray(data.slice());
   
-  var result = {
-    answers:shuffled.map(function (d) {
-      return d.answer;
-    }),
-    picked:data[0]
+  // get rid of anything with duplicate answers
+  // its possible that this will return less than chunk size
+  // but the caller shoudl be asking for more than they need anyway
+  data = data.filter(function (d,i,a) {
+    return !a.slice(0,i).some(function(e) {
+      return e.answer === d.answer;
+    });
+  });
+  
+  // now separate into separate questions - first select a chunk of questions
+  var questions = data.splice(0,chunkSize);
+  
+  // use the rest for multiple choice potential answers
+  return {
+    category:category,
+    questions:questions.map (function (d) {
+      return {
+        picked:d,
+        answers:shuffleArray([d].concat(data.splice(0,numAnswers - 1))).map(function (d) {
+          return d.answer;
+        })
+      };
+    })
   };
- 
-  return result;
+    
   
   // from http://stackoverflow.com/questions/2450954/how-to-randomize-shuffle-a-javascript-array
   function shuffleArray(array) {
@@ -73,14 +90,6 @@ function getQuestions (category, numAnswers) {
 
 function doQuery_ (sqlString) {
 
-  
-  sqlString =  sqlString || 'SELECT *, rand() as rand FROM' + 
-    ' [jeopardydata.questions]' + 
-    ' WHERE category = "COMMUNICATIONS"' +
-    ' ORDER BY rand' +
-    ' LIMIT 4';
-  // do the query
-  
   var ag = App.globals.bigQuery;
   return QueryUtils.query (
     App.goa.getProperty("apiKey"), 
